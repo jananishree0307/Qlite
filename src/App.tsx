@@ -68,6 +68,7 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
   const [userCenter, setUserCenter] = useState<LatLngLiteral>(DEFAULT_GPS_CENTER);
   const [gpsActive, setGpsActive] = useState(false);
   const [gpsPermission, setGpsPermission] = useState<GpsPermissionStatus>('detecting');
+  const [gpsAccuracyMeters, setGpsAccuracyMeters] = useState<number | null>(null);
   const [areaLabel, setAreaLabel] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<ServiceCategory | 'all'>('all');
   const [radiusKm, setRadiusKm] = useState<number>(10);
@@ -137,10 +138,15 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
   }, [showToast]);
 
   const applyNewCoordinates = useCallback(
-    (next: LatLngLiteral, fromGps: boolean, customLabel: string | null = null) => {
+    (
+      next: LatLngLiteral,
+      fromGps: boolean,
+      customLabel: string | null = null,
+      accuracyMeters: number | null = null
+    ) => {
       const movedKm = haversineDistanceKm(lastCenterRef.current, next);
       if (!fromGps || !gpsActiveRef.current || movedKm >= 0.25) {
-        if (movedKm >= 1.0) {
+        if (movedKm >= 0.5) {
           setInspectedPlaces({});
           data.setSelectedLocationId(null);
         }
@@ -151,8 +157,10 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
         gpsActiveRef.current = true;
         setGpsActive(true);
         setGpsPermission('granted');
+        setGpsAccuracyMeters(accuracyMeters);
         setAreaLabel(null);
       } else {
+        setGpsAccuracyMeters(null);
         setAreaLabel(customLabel);
       }
     },
@@ -168,8 +176,10 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
 
     let watchId: number | null = null;
     let permStatus: PermissionStatus | null = null;
+    let unmounted = false;
 
     const startWatching = () => {
+      if (unmounted) return;
       if (watchId !== null) {
         navigator.geolocation.clearWatch(watchId);
       }
@@ -177,11 +187,14 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
         (pos) => {
           if (manualAreaOverrideRef.current) {
             setGpsPermission('granted');
+            setGpsAccuracyMeters(pos.coords.accuracy ?? null);
             return;
           }
           applyNewCoordinates(
             { lat: pos.coords.latitude, lng: pos.coords.longitude },
-            true
+            true,
+            null,
+            pos.coords.accuracy ?? null
           );
         },
         (err) => {
@@ -191,29 +204,58 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
             setGpsActive(false);
           }
         },
-        { enableHighAccuracy: false, maximumAge: 30000, timeout: 8000 }
+        { enableHighAccuracy: true, maximumAge: 15000, timeout: 12000 }
       );
     };
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        if (!manualAreaOverrideRef.current) {
-          applyNewCoordinates(
-            { lat: pos.coords.latitude, lng: pos.coords.longitude },
-            true
+    const detectInitialPosition = () => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (unmounted) return;
+          if (!manualAreaOverrideRef.current) {
+            applyNewCoordinates(
+              { lat: pos.coords.latitude, lng: pos.coords.longitude },
+              true,
+              null,
+              pos.coords.accuracy ?? null
+            );
+          }
+          startWatching();
+        },
+        (err) => {
+          if (unmounted) return;
+          if (err.code === err.PERMISSION_DENIED) {
+            setGpsPermission('denied');
+            return;
+          }
+          // Retry once with standard network-assisted accuracy if high-accuracy GPS timed out
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              if (unmounted) return;
+              if (!manualAreaOverrideRef.current) {
+                applyNewCoordinates(
+                  { lat: pos.coords.latitude, lng: pos.coords.longitude },
+                  true,
+                  null,
+                  pos.coords.accuracy ?? null
+                );
+              }
+              startWatching();
+            },
+            (fallbackErr) => {
+              if (unmounted) return;
+              setGpsPermission(
+                fallbackErr.code === fallbackErr.PERMISSION_DENIED ? 'denied' : 'error'
+              );
+            },
+            { enableHighAccuracy: false, maximumAge: 60000, timeout: 10000 }
           );
-        }
-        startWatching();
-      },
-      (err) => {
-        if (err.code === err.PERMISSION_DENIED) {
-          setGpsPermission('denied');
-        } else {
-          setGpsPermission('denied');
-        }
-      },
-      { enableHighAccuracy: false, timeout: 6000 }
-    );
+        },
+        { enableHighAccuracy: true, maximumAge: 15000, timeout: 8000 }
+      );
+    };
+
+    detectInitialPosition();
 
     if (navigator.permissions?.query) {
       navigator.permissions
@@ -225,7 +267,7 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
             if (status.state === 'granted') {
               setGpsPermission('detecting');
               manualAreaOverrideRef.current = false;
-              startWatching();
+              detectInitialPosition();
             } else if (status.state === 'denied') {
               gpsActiveRef.current = false;
               setGpsPermission('denied');
@@ -239,6 +281,7 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
     }
 
     return () => {
+      unmounted = true;
       if (watchId !== null) {
         navigator.geolocation.clearWatch(watchId);
       }
@@ -269,29 +312,45 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
     }
     manualAreaOverrideRef.current = false;
     setGpsPermission('detecting');
+
+    const onSuccess = (pos: GeolocationPosition) => {
+      const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      setInspectedPlaces({});
+      data.setSelectedLocationId(null);
+      lastCenterRef.current = next;
+      gpsActiveRef.current = true;
+      setUserCenter(next);
+      setGpsActive(true);
+      setGpsPermission('granted');
+      setGpsAccuracyMeters(pos.coords.accuracy ?? null);
+      setAreaLabel(null);
+      nearby.refresh();
+      showToast('Live GPS updated. Fetching nearby real-world places...');
+    };
+
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setInspectedPlaces({});
-        data.setSelectedLocationId(null);
-        lastCenterRef.current = next;
-        gpsActiveRef.current = true;
-        setUserCenter(next);
-        setGpsActive(true);
-        setGpsPermission('granted');
-        setAreaLabel(null);
-        nearby.refresh();
-        showToast('Live GPS updated. Fetching nearby real-world places...');
-      },
+      onSuccess,
       (err) => {
         if (err.code === err.PERMISSION_DENIED) {
           setGpsPermission('denied');
-          showToast('Location permission denied. Enable location in browser settings or select an area.');
-        } else {
-          showToast('Unable to get GPS fix right now. Try selecting an area.');
+          showToast('Location permission denied. Enable location in browser settings or search an area.');
+          return;
         }
+        navigator.geolocation.getCurrentPosition(
+          onSuccess,
+          (fallbackErr) => {
+            if (fallbackErr.code === fallbackErr.PERMISSION_DENIED) {
+              setGpsPermission('denied');
+              showToast('Location permission denied. Enable location in browser settings or search an area.');
+            } else {
+              setGpsPermission('error');
+              showToast('Unable to get GPS fix right now. Try selecting an area.');
+            }
+          },
+          { enableHighAccuracy: false, maximumAge: 30000, timeout: 10000 }
+        );
       },
-      { enableHighAccuracy: true, timeout: 8000 }
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
     );
   }, [data.setSelectedLocationId, nearby.refresh, showToast]);
 
@@ -656,11 +715,13 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
             userCenter={userCenter}
             gpsActive={gpsActive}
             gpsPermission={gpsPermission}
+            gpsAccuracyMeters={gpsAccuracyMeters}
             areaLabel={areaLabel}
             category={categoryFilter}
             radiusKm={radiusKm}
             nearbyLoading={nearby.loading}
             nearbyError={nearby.error}
+            nearbyUpdatedAtMs={nearby.lastFetchedAtMs}
             activeToken={data.activeUserToken}
             t={t}
             onCategoryChange={setCategoryFilter}
@@ -708,11 +769,13 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
             userCenter={userCenter}
             gpsActive={gpsActive}
             gpsPermission={gpsPermission}
+            gpsAccuracyMeters={gpsAccuracyMeters}
             areaLabel={areaLabel}
             category={categoryFilter}
             radiusKm={radiusKm}
             nearbyLoading={nearby.loading}
             nearbyError={nearby.error}
+            nearbyUpdatedAtMs={nearby.lastFetchedAtMs}
             initialSelectedLocation={selectedLocation}
             initialShowRoute={exploreWithRoute}
             t={t}

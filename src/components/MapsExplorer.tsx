@@ -284,16 +284,26 @@ function RouteOverlay({ origin, destination, onRouteComputed }: RouteOverlayProp
   return null;
 }
 
+function getZoomForRadiusKm(radiusKm?: number): number {
+  if (!radiusKm || radiusKm <= 1) return 15;
+  if (radiusKm <= 3) return 14;
+  if (radiusKm <= 5) return 13;
+  if (radiusKm <= 10) return 12;
+  return 11;
+}
+
 interface VenueMarkerProps {
   location: ServiceLocation;
+  userCenter: LatLngLiteral;
   isSelected: boolean;
   t: TranslationBundle;
-  onSelect: (loc: ServiceLocation) => void;
+  onSelect: (loc: ServiceLocation | null) => void;
   onOpenDetails: (loc: ServiceLocation) => void;
 }
 
 function VenueMarker({
   location,
+  userCenter,
   isSelected,
   t,
   onSelect,
@@ -302,6 +312,7 @@ function VenueMarker({
   const [markerRef, marker] = useAdvancedMarkerRef();
   const colors = getCrowdPinColor(location.crowdLevel);
   const waitMins = computeLocationWaitMinutes(location);
+  const distKm = haversineDistanceKm(userCenter, { lat: location.lat, lng: location.lng });
 
   return (
     <>
@@ -331,12 +342,17 @@ function VenueMarker({
       </AdvancedMarker>
 
       {isSelected && marker && (
-        <InfoWindow anchor={marker} maxWidth={290} onCloseClick={() => onSelect(location)}>
+        <InfoWindow anchor={marker} maxWidth={310} onCloseClick={() => onSelect(null)}>
           <div className="p-1.5 font-sans space-y-2">
             <div className="flex items-start justify-between gap-2">
-              <p className="text-sm font-bold text-slate-900 leading-snug">
-                {location.name}
-              </p>
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold text-blue-700">
+                  {t.categories[location.category]} · {distKm.toFixed(1)} km
+                </p>
+                <p className="text-sm font-bold text-slate-900 leading-snug">
+                  {location.name}
+                </p>
+              </div>
               {location.isOpenNow !== null && location.isOpenNow !== undefined && (
                 <span
                   className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
@@ -349,6 +365,8 @@ function VenueMarker({
                 </span>
               )}
             </div>
+
+            <p className="text-xs text-slate-600 leading-snug line-clamp-2">{location.address}</p>
 
             <CrowdIndicator
               compact
@@ -363,19 +381,35 @@ function VenueMarker({
                 <span className="font-semibold">{waitMins ?? 0}</span> {t.place.mins}
               </p>
             ) : (
-              <p className="text-xs text-slate-500">
+              <p className="text-[11px] text-slate-500">
                 {location.generalBusyness ? t.busyness[location.generalBusyness] : t.dataSource.google_places} ·{' '}
                 {t.dataSource.unavailable}
               </p>
             )}
 
-            <button
-              type="button"
-              onClick={() => onOpenDetails(location)}
-              className="w-full py-1.5 px-3 rounded-lg bg-blue-700 text-white text-xs font-semibold hover:bg-blue-800 transition-colors"
-            >
-              {location.hasLiveCrowdData ? t.place.joinQueue : t.home.viewDetails}
-            </button>
+            <p className="text-[10px] font-mono tabular-nums text-slate-400">
+              {location.lat.toFixed(4)}, {location.lng.toFixed(4)}
+            </p>
+
+            <div className="flex items-center gap-1.5 pt-0.5">
+              <button
+                type="button"
+                onClick={() => onOpenDetails(location)}
+                className="flex-1 py-1.5 px-3 rounded-lg bg-blue-700 text-white text-xs font-semibold hover:bg-blue-800 transition-colors"
+              >
+                {location.hasLiveCrowdData ? t.place.joinQueue : t.home.viewDetails}
+              </button>
+              <a
+                href={`https://www.google.com/maps/dir/?api=1&origin=${userCenter.lat},${userCenter.lng}&destination=${location.lat},${location.lng}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="py-1.5 px-2.5 rounded-lg border border-slate-200 text-blue-700 hover:bg-blue-50 text-xs font-semibold inline-flex items-center gap-1 shrink-0"
+                title={t.place.getDirections}
+              >
+                <Navigation className="w-3.5 h-3.5" />
+                <span>Directions</span>
+              </a>
+            </div>
           </div>
         </InfoWindow>
       )}
@@ -386,18 +420,21 @@ function VenueMarker({
 interface MapsExplorerProps {
   locations: ServiceLocation[];
   userCenter: LatLngLiteral;
+  radiusKm?: number;
   selectedLocation: ServiceLocation | null;
   showRouteToSelected: boolean;
   t: TranslationBundle;
-  onSelectLocation: (loc: ServiceLocation) => void;
+  onSelectLocation: (loc: ServiceLocation | null) => void;
   onOpenDetails: (loc: ServiceLocation) => void;
   onRouteComputed?: (est: RouteEstimate | null) => void;
   onPlaceDiscovered?: (place: DiscoveredGooglePlace) => void;
+  onMoveArea?: (place: DiscoveredGooglePlace) => void;
 }
 
 function MapCanvasInner({
   locations,
   userCenter,
+  radiusKm = 10,
   selectedLocation,
   showRouteToSelected,
   t,
@@ -405,11 +442,13 @@ function MapCanvasInner({
   onOpenDetails,
   onRouteComputed = () => {},
   onPlaceDiscovered,
+  onMoveArea,
 }: MapsExplorerProps) {
   const status = useApiLoadingStatus();
   const map = useMap();
   const [discoveredPlace, setDiscoveredPlace] = useState<DiscoveredGooglePlace | null>(null);
   const lastUserCenterRef = useRef<LatLngLiteral>(userCenter);
+  const lastRadiusRef = useRef<number>(radiusKm);
 
   useEffect(() => {
     if (!map) return;
@@ -418,8 +457,22 @@ function MapCanvasInner({
       lastUserCenterRef.current = userCenter;
       setDiscoveredPlace(null);
       map.panTo(userCenter);
+      if (!showRouteToSelected) {
+        map.setZoom(getZoomForRadiusKm(radiusKm));
+      }
     }
-  }, [map, userCenter.lat, userCenter.lng]);
+  }, [map, userCenter.lat, userCenter.lng, radiusKm, showRouteToSelected]);
+
+  useEffect(() => {
+    if (!map) return;
+    if (lastRadiusRef.current !== radiusKm) {
+      lastRadiusRef.current = radiusKm;
+      if (!showRouteToSelected) {
+        map.panTo(userCenter);
+        map.setZoom(getZoomForRadiusKm(radiusKm));
+      }
+    }
+  }, [map, radiusKm, userCenter, showRouteToSelected]);
 
   useEffect(() => {
     if (map && selectedLocation) {
@@ -466,7 +519,7 @@ function MapCanvasInner({
           onClick={() => {
             if (map) {
               map.panTo(userCenter);
-              map.setZoom(14);
+              map.setZoom(getZoomForRadiusKm(radiusKm));
             }
           }}
           title="Center map on current location"
@@ -480,15 +533,16 @@ function MapCanvasInner({
       <GoogleMap
         mapId="DEMO_MAP_ID"
         defaultCenter={userCenter}
-        defaultZoom={13}
+        defaultZoom={getZoomForRadiusKm(radiusKm)}
         gestureHandling="greedy"
         disableDefaultUI={false}
         internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
         style={{ width: '100%', height: '100%', minHeight: '380px' }}
       >
         {/* User current GPS marker */}
-        <AdvancedMarker position={userCenter} title="Your GPS Location">
+        <AdvancedMarker position={userCenter} title="Your Current Location">
           <div className="relative flex items-center justify-center">
+            <span className="w-8 h-8 rounded-full bg-blue-500/25 animate-ping absolute" />
             <span className="w-7 h-7 rounded-full bg-blue-500/20 absolute" />
             <div className="w-4 h-4 rounded-full bg-blue-700 border-2 border-white shadow-md" />
           </div>
@@ -499,6 +553,7 @@ function MapCanvasInner({
           <VenueMarker
             key={loc.id}
             location={loc}
+            userCenter={userCenter}
             isSelected={selectedLocation?.id === loc.id}
             t={t}
             onSelect={onSelectLocation}
@@ -526,20 +581,34 @@ function MapCanvasInner({
       </GoogleMap>
 
       {discoveredPlace && (
-        <div className="absolute bottom-3 left-3 right-3 sm:right-auto sm:max-w-sm bg-white border border-slate-200 rounded-xl p-3 shadow-lg z-20 flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-blue-700">Google Place Found</p>
-            <p className="text-sm font-semibold text-slate-900 truncate">{discoveredPlace.name}</p>
-            <p className="text-xs text-slate-500 truncate">{discoveredPlace.address}</p>
+        <div className="absolute bottom-3 left-3 right-3 sm:right-auto sm:max-w-sm bg-white border border-slate-200 rounded-xl p-3 shadow-lg z-20 space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-blue-700">Google Place Found</p>
+              <p className="text-sm font-semibold text-slate-900 truncate">{discoveredPlace.name}</p>
+              <p className="text-xs text-slate-500 truncate">{discoveredPlace.address}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDiscoveredPlace(null)}
+              className="p-1 text-slate-400 hover:text-slate-600 shrink-0"
+              aria-label="Close discovered place"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setDiscoveredPlace(null)}
-            className="p-1 text-slate-400 hover:text-slate-600 shrink-0"
-            aria-label="Close discovered place"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {onMoveArea && (
+            <button
+              type="button"
+              onClick={() => {
+                onMoveArea(discoveredPlace);
+                setDiscoveredPlace(null);
+              }}
+              className="w-full py-1.5 px-3 rounded-lg bg-blue-50 text-blue-800 text-xs font-semibold hover:bg-blue-100 transition-colors"
+            >
+              Search Nearby Places Here
+            </button>
+          )}
         </div>
       )}
     </div>

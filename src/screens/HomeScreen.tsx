@@ -12,6 +12,7 @@ import {
   Radio,
   RefreshCw,
   Search,
+  Star,
   Ticket,
   Users,
 } from 'lucide-react';
@@ -51,7 +52,7 @@ const CATEGORY_LIST: (ServiceCategory | 'all')[] = [
 
 const RADIUS_OPTIONS_KM = [1, 3, 5, 10, 20];
 
-export type GpsPermissionStatus = 'detecting' | 'granted' | 'denied' | 'unsupported';
+export type GpsPermissionStatus = 'detecting' | 'granted' | 'denied' | 'error' | 'unsupported';
 
 interface HomeScreenProps {
   userName?: string | null;
@@ -60,11 +61,13 @@ interface HomeScreenProps {
   userCenter: LatLngLiteral;
   gpsActive: boolean;
   gpsPermission: GpsPermissionStatus;
+  gpsAccuracyMeters?: number | null;
   areaLabel: string | null;
   category: ServiceCategory | 'all';
   radiusKm: number;
   nearbyLoading: boolean;
   nearbyError: string | null;
+  nearbyUpdatedAtMs?: number | null;
   activeToken: QueueToken | null;
   t: TranslationBundle;
   onCategoryChange: (cat: ServiceCategory | 'all') => void;
@@ -91,6 +94,7 @@ function getTimeGreeting(t: TranslationBundle): string {
 function deriveShortAreaName(locations: ServiceLocation[], userCenter: LatLngLiteral): string | null {
   const nearest = [...locations]
     .map((loc) => ({ loc, dist: haversineDistanceKm(userCenter, { lat: loc.lat, lng: loc.lng }) }))
+    .filter((item) => item.dist <= 25)
     .sort((a, b) => a.dist - b.dist)[0]?.loc;
   if (!nearest?.address) return null;
   const parts = nearest.address
@@ -113,11 +117,13 @@ export function HomeScreen({
   userCenter,
   gpsActive,
   gpsPermission,
+  gpsAccuracyMeters,
   areaLabel,
   category,
   radiusKm,
   nearbyLoading,
   nearbyError,
+  nearbyUpdatedAtMs,
   activeToken,
   t,
   onCategoryChange,
@@ -150,10 +156,7 @@ export function HomeScreen({
         return { loc, distKm, waitMins };
       })
       .sort((a, b) => {
-        const aWithin = a.distKm <= radiusKm;
-        const bWithin = b.distKm <= radiusKm;
-        if (aWithin !== bWithin) return aWithin ? -1 : 1;
-        if (aWithin && bWithin && a.loc.hasLiveCrowdData !== b.loc.hasLiveCrowdData) {
+        if (a.distKm <= radiusKm && b.distKm <= radiusKm && a.loc.hasLiveCrowdData !== b.loc.hasLiveCrowdData) {
           return a.loc.hasLiveCrowdData ? -1 : 1;
         }
         return a.distKm - b.distKm;
@@ -162,8 +165,9 @@ export function HomeScreen({
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const maxDist = q ? Math.max(radiusKm, 25) : radiusKm;
     return enriched.filter(({ loc, distKm }) => {
-      const inRadius = q ? distKm <= Math.max(radiusKm, 50) : distKm <= Math.max(radiusKm, 20);
+      const inRadius = distKm <= maxDist + 0.3;
       const catMatch = category === 'all' || loc.category === category;
       const textMatch =
         !q ||
@@ -185,24 +189,15 @@ export function HomeScreen({
     return () => clearTimeout(timer);
   }, [search, filtered.length, onSearchPlacesByText]);
 
-  const withinSelectedRadius = filtered.filter((item) => item.distKm <= radiusKm);
-  const displayedPlaces =
-    withinSelectedRadius.length > 0
-      ? withinSelectedRadius
-      : filtered.length > 0
-      ? filtered.slice(0, 12)
-      : enriched.slice(0, 12);
+  const displayedPlaces = filtered;
 
-  const showingExpandedFallback =
-    withinSelectedRadius.length === 0 && displayedPlaces.length > 0;
-
-  // Live crowd highlights: strictly connected live_provider venues only
+  // Live crowd highlights: strictly connected live_provider venues near current location
   const liveHighlights = useMemo(() => {
     return enriched
-      .filter(({ loc }) => loc.hasLiveCrowdData && !loc.isPaused)
+      .filter(({ loc, distKm }) => loc.hasLiveCrowdData && !loc.isPaused && distKm <= Math.max(radiusKm, 25))
       .sort((a, b) => (a.waitMins ?? 999) - (b.waitMins ?? 999))
       .slice(0, 4);
-  }, [enriched]);
+  }, [enriched, radiusKm]);
 
   const recentlyViewedResolved = useMemo(() => {
     return recentlyViewed
@@ -237,15 +232,31 @@ export function HomeScreen({
               <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-balance">
                 {t.home.whereToGo}
               </h1>
-              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-blue-100">
-                <span className="inline-flex items-center gap-1.5 font-medium text-white">
-                  <MapPin className="w-3.5 h-3.5 text-blue-300 shrink-0" />
+              <div className="flex flex-wrap items-center gap-2 text-xs text-blue-100">
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold ${
+                    areaLabel
+                      ? 'bg-blue-500/25 text-white border border-blue-300/30'
+                      : gpsActive && gpsPermission === 'granted'
+                      ? 'bg-emerald-500/20 text-emerald-100 border border-emerald-400/30'
+                      : 'bg-amber-500/20 text-amber-100 border border-amber-300/30'
+                  }`}
+                >
+                  <MapPin className="w-3.5 h-3.5 shrink-0" />
                   <span>
-                    {resolvedArea ||
-                      (gpsActive ? t.home.gpsActive : t.home.gpsFallback)}
+                    {areaLabel
+                      ? `Area: ${areaLabel}`
+                      : gpsPermission === 'detecting'
+                      ? 'Detecting live GPS...'
+                      : gpsActive && gpsPermission === 'granted'
+                      ? `${resolvedArea ? `${resolvedArea} · ` : ''}${t.home.gpsActive}${
+                          gpsAccuracyMeters ? ` (±${Math.round(gpsAccuracyMeters)}m)` : ''
+                        }`
+                      : resolvedArea
+                      ? `${resolvedArea} · ${t.home.gpsFallback}`
+                      : t.home.gpsFallback}
                   </span>
                 </span>
-                <span aria-hidden="true" className="text-blue-300">·</span>
                 <span className="font-mono tabular-nums text-[11px] text-blue-200">
                   {userCenter.lat.toFixed(4)}, {userCenter.lng.toFixed(4)}
                 </span>
@@ -270,7 +281,11 @@ export function HomeScreen({
               >
                 <LocateFixed className="w-4 h-4 text-blue-200" />
                 <span>
-                  {gpsPermission === 'detecting' ? 'Detecting GPS...' : t.home.refreshLocation}
+                  {gpsPermission === 'detecting'
+                    ? 'Detecting GPS...'
+                    : areaLabel
+                    ? 'Use My Live GPS'
+                    : t.home.refreshLocation}
                 </span>
               </button>
               <button
@@ -301,7 +316,7 @@ export function HomeScreen({
             {MAPS_API_KEY && (
               <div className="lg:col-span-5">
                 <PlacesAutocompleteBox
-                  placeholder="Jump to any Google Maps destination..."
+                  placeholder="Jump to any Google Maps place or city..."
                   userCenter={userCenter}
                   onSelectPlace={onSelectGooglePlace}
                 />
@@ -344,7 +359,10 @@ export function HomeScreen({
       )}
 
       {/* Location Permission / Area Switcher Alert */}
-      {(gpsPermission === 'denied' || gpsPermission === 'unsupported' || showAreaChanger) && (
+      {(gpsPermission === 'denied' ||
+        gpsPermission === 'error' ||
+        gpsPermission === 'unsupported' ||
+        showAreaChanger) && (
         <section className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-start gap-2.5">
@@ -353,14 +371,18 @@ export function HomeScreen({
                 <p className="text-xs font-bold text-amber-950">
                   {gpsPermission === 'denied'
                     ? 'Location permission is blocked in your browser'
+                    : gpsPermission === 'error'
+                    ? 'Unable to lock live GPS signal right now'
                     : gpsPermission === 'unsupported'
                     ? 'GPS geolocation is unavailable on this device'
-                    : 'Switch area or city'}
+                    : 'Move to another neighborhood or city'}
                 </p>
                 <p className="text-xs text-amber-900">
                   {gpsPermission === 'denied'
-                    ? 'Allow location access in browser site settings and click Retry GPS, or search any city/area below to fetch real nearby places there.'
-                    : 'Search any neighborhood or city to dynamically load real nearby places there.'}
+                    ? 'Allow location access in browser site settings and click Retry GPS, or search any area/city below to dynamically load real places there.'
+                    : gpsPermission === 'error'
+                    ? 'Check device location settings and click Retry GPS, or choose any area below.'
+                    : 'Search any neighborhood or city to dynamically load real nearby places via Google Places Nearby Search.'}
                 </p>
               </div>
             </div>
@@ -388,7 +410,7 @@ export function HomeScreen({
           {MAPS_API_KEY && (
             <div className="max-w-md">
               <PlacesAutocompleteBox
-                placeholder="Move to any area or city (e.g. Vadapalani, Indiranagar, Mumbai)..."
+                placeholder="Search any area or city..."
                 userCenter={userCenter}
                 onSelectPlace={(place) => {
                   onMoveArea(place);
@@ -564,11 +586,15 @@ export function HomeScreen({
       {/* Nearby Real-World Popular Places Grid */}
       <section className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             <h2 className="text-lg font-bold text-slate-900">{t.home.nearbyPlaces}</h2>
-            {nearbyLoading && (
+            {nearbyLoading ? (
               <span className="text-xs text-blue-700 font-medium">{t.home.detectingPlaces}</span>
-            )}
+            ) : nearbyUpdatedAtMs ? (
+              <span className="text-[11px] text-slate-400">
+                · {formatRelativeTime(nearbyUpdatedAtMs)}
+              </span>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -616,23 +642,6 @@ export function HomeScreen({
           </div>
         )}
 
-        {showingExpandedFallback && (
-          <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-blue-950">
-            <span>
-              No exact matches within {radiusKm} km — showing nearest places nearby.
-            </span>
-            {radiusKm < 20 && (
-              <button
-                type="button"
-                onClick={() => onRadiusChange(20)}
-                className="px-3 py-1 rounded-lg bg-blue-700 text-white font-semibold hover:bg-blue-800"
-              >
-                Set Radius to 20 km
-              </button>
-            )}
-          </div>
-        )}
-
         {displayedPlaces.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-3">
             <p className="text-sm font-medium text-slate-700">
@@ -640,21 +649,38 @@ export function HomeScreen({
                 ? t.home.detectingPlaces
                 : !MAPS_API_KEY
                 ? 'Add a Google Maps API key or connect a verified venue in Staff Desk to discover nearby places.'
-                : 'Searching for nearby venues around your coordinates...'}
+                : `No ${category === 'all' ? 'places' : t.categories[category].toLowerCase()} found within ${radiusKm} km of ${
+                    resolvedArea || 'your current coordinates'
+                  }.`}
             </p>
             {MAPS_API_KEY && !nearbyLoading && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearch('');
-                  onCategoryChange('all');
-                  onRadiusChange(20);
-                  onRefreshNearby();
-                }}
-                className="px-4 py-2 rounded-xl bg-blue-700 text-white text-xs font-semibold hover:bg-blue-800"
-              >
-                Expand to 20 km & Reload
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {radiusKm < 20 && (
+                  <button
+                    type="button"
+                    onClick={() => onRadiusChange(radiusKm < 10 ? 10 : 20)}
+                    className="px-4 py-2 rounded-xl bg-blue-700 text-white text-xs font-semibold hover:bg-blue-800"
+                  >
+                    Expand Radius to {radiusKm < 10 ? 10 : 20} km
+                  </button>
+                )}
+                {category !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => onCategoryChange('all')}
+                    className="px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 text-xs font-semibold hover:bg-slate-100"
+                  >
+                    {t.home.allCategories}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onRefreshNearby}
+                  className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-blue-700 text-xs font-semibold hover:bg-slate-50"
+                >
+                  {t.home.refreshNearby}
+                </button>
+              </div>
             )}
           </div>
         ) : (
@@ -683,17 +709,25 @@ export function HomeScreen({
                     name={loc.name}
                     className="h-40 w-full"
                   />
-                  {loc.isOpenNow !== null && loc.isOpenNow !== undefined && (
-                    <span
-                      className={`absolute top-3 right-3 px-2.5 py-1 rounded-full text-[11px] font-bold shadow-xs ${
-                        loc.isOpenNow
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-900/85 text-white'
-                      }`}
-                    >
-                      {loc.isOpenNow ? t.home.openNow : t.home.closed}
-                    </span>
-                  )}
+                  <div className="absolute top-3 right-3 flex items-center gap-1.5">
+                    {typeof loc.rating === 'number' && (
+                      <span className="px-2 py-1 rounded-full text-[11px] font-bold bg-slate-950/80 text-amber-300 inline-flex items-center gap-1 shadow-xs">
+                        <Star className="w-3 h-3 fill-amber-300 text-amber-300" />
+                        <span className="tabular-nums">{loc.rating.toFixed(1)}</span>
+                      </span>
+                    )}
+                    {loc.isOpenNow !== null && loc.isOpenNow !== undefined && (
+                      <span
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-bold shadow-xs ${
+                          loc.isOpenNow
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-900/85 text-white'
+                        }`}
+                      >
+                        {loc.isOpenNow ? t.home.openNow : t.home.closed}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="p-4 flex-1 flex flex-col justify-between gap-3.5">
@@ -725,6 +759,9 @@ export function HomeScreen({
                       {loc.name}
                     </h3>
                     <p className="text-xs text-slate-500 line-clamp-2">{loc.address}</p>
+                    <p className="text-[11px] font-mono tabular-nums text-slate-400">
+                      {loc.lat.toFixed(4)}, {loc.lng.toFixed(4)}
+                    </p>
                   </div>
 
                   {/* Honest Crowd & Queue Info */}

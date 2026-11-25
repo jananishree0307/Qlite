@@ -13,7 +13,11 @@ import {
   Users,
 } from 'lucide-react';
 import { TranslationBundle } from '../i18n/translations';
-import { computeLocationWaitMinutes, haversineDistanceKm } from '../lib/queueEngine';
+import {
+  computeLocationWaitMinutes,
+  formatRelativeTime,
+  haversineDistanceKm,
+} from '../lib/queueEngine';
 import {
   DiscoveredGooglePlace,
   LatLngLiteral,
@@ -47,11 +51,13 @@ interface ExploreScreenProps {
   userCenter: LatLngLiteral;
   gpsActive: boolean;
   gpsPermission: GpsPermissionStatus;
+  gpsAccuracyMeters?: number | null;
   areaLabel: string | null;
   category: ServiceCategory | 'all';
   radiusKm: number;
   nearbyLoading: boolean;
   nearbyError: string | null;
+  nearbyUpdatedAtMs?: number | null;
   initialSelectedLocation: ServiceLocation | null;
   initialShowRoute?: boolean;
   t: TranslationBundle;
@@ -70,11 +76,13 @@ export function ExploreScreen({
   userCenter,
   gpsActive,
   gpsPermission,
+  gpsAccuracyMeters,
   areaLabel,
   category,
   radiusKm,
   nearbyLoading,
   nearbyError,
+  nearbyUpdatedAtMs,
   initialSelectedLocation,
   initialShowRoute = false,
   t,
@@ -88,7 +96,7 @@ export function ExploreScreen({
   onQuickRegisterGooglePlace,
 }: ExploreScreenProps) {
   const [selectedLoc, setSelectedLoc] = useState<ServiceLocation | null>(
-    initialSelectedLocation || locations[0] || null
+    initialSelectedLocation || null
   );
   const [viewMode, setViewMode] = useState<'split' | 'map' | 'list'>('split');
   const [showRoute, setShowRoute] = useState(initialShowRoute);
@@ -104,26 +112,30 @@ export function ExploreScreen({
         waitMins: computeLocationWaitMinutes(loc),
       }))
       .sort((a, b) => {
-        const aWithin = a.distKm <= radiusKm;
-        const bWithin = b.distKm <= radiusKm;
-        if (aWithin !== bWithin) return aWithin ? -1 : 1;
+        if (a.distKm <= radiusKm && b.distKm <= radiusKm && a.loc.hasLiveCrowdData !== b.loc.hasLiveCrowdData) {
+          return a.loc.hasLiveCrowdData ? -1 : 1;
+        }
         return a.distKm - b.distKm;
       });
   }, [locations, userCenter, radiusKm]);
 
   const filtered = useMemo(() => {
-    const withinRadiusAndCat = sortedAll.filter(
-      ({ loc, distKm }) => distKm <= radiusKm && (category === 'all' || loc.category === category)
+    return sortedAll.filter(
+      ({ loc, distKm }) => distKm <= radiusKm + 0.3 && (category === 'all' || loc.category === category)
     );
-    if (withinRadiusAndCat.length > 0) return withinRadiusAndCat;
-    const exactCat = sortedAll.filter(({ loc }) => category === 'all' || loc.category === category);
-    return exactCat.length > 0 ? exactCat : sortedAll;
   }, [sortedAll, category, radiusKm]);
 
   useEffect(() => {
     if (initialSelectedLocation) {
-      setSelectedLoc(initialSelectedLocation);
-      return;
+      const stillNear =
+        haversineDistanceKm(userCenter, {
+          lat: initialSelectedLocation.lat,
+          lng: initialSelectedLocation.lng,
+        }) <= Math.max(radiusKm, 25);
+      if (stillNear) {
+        setSelectedLoc(initialSelectedLocation);
+        return;
+      }
     }
     if (filtered.length > 0) {
       const stillPresent = selectedLoc && filtered.some((f) => f.loc.id === selectedLoc.id);
@@ -133,7 +145,7 @@ export function ExploreScreen({
     } else {
       setSelectedLoc(null);
     }
-  }, [initialSelectedLocation, filtered, selectedLoc]);
+  }, [initialSelectedLocation, filtered, selectedLoc, userCenter, radiusKm]);
 
   const showMapPane = viewMode === 'split' || viewMode === 'map';
   const showListPane = viewMode === 'split' || viewMode === 'list';
@@ -144,7 +156,14 @@ export function ExploreScreen({
       <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-3 shadow-2xs">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold text-slate-900">{t.nav.explore}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-bold text-slate-900">{t.nav.explore}</h1>
+              {nearbyUpdatedAtMs && !nearbyLoading && (
+                <span className="text-[11px] text-slate-400">
+                  · {formatRelativeTime(nearbyUpdatedAtMs)}
+                </span>
+              )}
+            </div>
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-500 mt-1">
               <span className="inline-flex items-center gap-1">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
@@ -167,14 +186,22 @@ export function ExploreScreen({
                 {t.crowd.unavailable}
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-1">
-              {areaLabel ? `${areaLabel} · ` : ''}
-              {userCenter.lat.toFixed(4)}, {userCenter.lng.toFixed(4)}
+            <p className="text-[11px] text-slate-500 font-mono tabular-nums mt-1 flex flex-wrap items-center gap-1.5">
+              <span>
+                {areaLabel
+                  ? `Area: ${areaLabel}`
+                  : gpsActive && gpsPermission === 'granted'
+                  ? `Live GPS${gpsAccuracyMeters ? ` (±${Math.round(gpsAccuracyMeters)}m)` : ''}`
+                  : gpsPermission === 'detecting'
+                  ? 'Detecting GPS...'
+                  : 'Default Preview Area'}{' '}
+                · {userCenter.lat.toFixed(4)}, {userCenter.lng.toFixed(4)}
+              </span>
               {MAPS_API_KEY && (
                 <button
                   type="button"
                   onClick={() => setShowAreaChanger((v) => !v)}
-                  className="ml-2 font-sans text-blue-700 font-semibold hover:underline"
+                  className="font-sans text-blue-700 font-semibold hover:underline"
                 >
                   Change Area
                 </button>
@@ -249,6 +276,8 @@ export function ExploreScreen({
                   ? 'Detecting...'
                   : gpsActive && !areaLabel
                   ? t.home.gpsActive
+                  : areaLabel
+                  ? 'Use My Live GPS'
                   : t.home.detectGps}
               </span>
             </button>
@@ -313,7 +342,10 @@ export function ExploreScreen({
       </div>
 
       {/* Permission / Switch Area Panel */}
-      {(gpsPermission === 'denied' || gpsPermission === 'unsupported' || showAreaChanger) && (
+      {(gpsPermission === 'denied' ||
+        gpsPermission === 'error' ||
+        gpsPermission === 'unsupported' ||
+        showAreaChanger) && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2.5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-start gap-2">
@@ -321,16 +353,29 @@ export function ExploreScreen({
               <p className="text-xs text-amber-950">
                 {gpsPermission === 'denied'
                   ? 'Location permission denied. Enable browser location and click Retry GPS, or search any area/city to view real nearby places there.'
+                  : gpsPermission === 'error'
+                  ? 'GPS signal unavailable right now. Click Retry GPS or search any neighborhood or city below.'
                   : 'Search any neighborhood or city to jump the map and fetch nearby places dynamically.'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onRequestGps}
-              className="px-3 py-1.5 rounded-lg bg-amber-900 text-white text-xs font-semibold shrink-0"
-            >
-              Retry GPS
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={onRequestGps}
+                className="px-3 py-1.5 rounded-lg bg-amber-900 text-white text-xs font-semibold shrink-0"
+              >
+                Retry GPS
+              </button>
+              {showAreaChanger && (
+                <button
+                  type="button"
+                  onClick={() => setShowAreaChanger(false)}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-amber-900 text-xs font-semibold"
+                >
+                  Close
+                </button>
+              )}
+            </div>
           </div>
           {MAPS_API_KEY && (
             <div className="max-w-md">
@@ -362,12 +407,13 @@ export function ExploreScreen({
         {showMapPane && (
           <div
             className={`${
-              viewMode === 'split' ? 'lg:col-span-7 h-[400px] lg:h-[580px]' : 'h-[540px]'
+              viewMode === 'split' ? 'lg:col-span-7 h-[420px] lg:h-[600px]' : 'h-[560px]'
             } flex flex-col gap-2`}
           >
             <MapsExplorer
               locations={filtered.map((f) => f.loc)}
               userCenter={userCenter}
+              radiusKm={radiusKm}
               selectedLocation={selectedLoc}
               showRouteToSelected={showRoute}
               t={t}
@@ -375,6 +421,7 @@ export function ExploreScreen({
               onOpenDetails={onOpenDetails}
               onRouteComputed={setRouteEstimate}
               onPlaceDiscovered={setDiscovered}
+              onMoveArea={onMoveArea}
             />
 
             {showRoute && routeEstimate && selectedLoc && (
@@ -424,22 +471,55 @@ export function ExploreScreen({
         {showListPane && (
           <div
             className={`${
-              viewMode === 'split' ? 'lg:col-span-5 max-h-[580px]' : ''
+              viewMode === 'split' ? 'lg:col-span-5 max-h-[600px]' : ''
             } bg-white border border-slate-200 rounded-2xl overflow-hidden flex flex-col shadow-2xs`}
           >
             <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
               <span className="text-sm font-bold text-slate-900">{t.home.nearbyPlaces}</span>
               <span className="text-xs text-slate-500 tabular-nums">
-                {nearbyLoading ? 'Updating...' : `${filtered.length} places`}
+                {nearbyLoading ? 'Updating...' : `${filtered.length} within ${radiusKm} km`}
               </span>
             </div>
 
             <div className="divide-y divide-slate-100 overflow-y-auto flex-1">
               {filtered.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-500">
-                  {nearbyLoading
-                    ? t.home.detectingPlaces
-                    : 'Waiting for nearby places from Google Maps...'}
+                <div className="p-8 text-center space-y-3">
+                  <p className="text-xs font-medium text-slate-600">
+                    {nearbyLoading
+                      ? t.home.detectingPlaces
+                      : `No ${category === 'all' ? 'places' : t.categories[category].toLowerCase()} found within ${radiusKm} km.`}
+                  </p>
+                  {!nearbyLoading && (
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      {radiusKm < 20 && (
+                        <button
+                          type="button"
+                          onClick={() => onRadiusChange(radiusKm < 10 ? 10 : 20)}
+                          className="px-3 py-1.5 rounded-lg bg-blue-700 text-white text-xs font-semibold hover:bg-blue-800"
+                        >
+                          Expand to {radiusKm < 10 ? 10 : 20} km
+                        </button>
+                      )}
+                      {category !== 'all' && (
+                        <button
+                          type="button"
+                          onClick={() => onCategoryChange('all')}
+                          className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-800 text-xs font-semibold hover:bg-slate-200"
+                        >
+                          {t.home.allCategories}
+                        </button>
+                      )}
+                      {MAPS_API_KEY && (
+                        <button
+                          type="button"
+                          onClick={onRefreshNearby}
+                          className="px-3 py-1.5 rounded-lg border border-slate-200 text-blue-700 text-xs font-semibold hover:bg-slate-50"
+                        >
+                          {t.home.refreshNearby}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
                 filtered.map(({ loc, distKm, waitMins }) => {
@@ -472,6 +552,9 @@ export function ExploreScreen({
                           </div>
                           <p className="text-sm font-bold text-slate-900 truncate">{loc.name}</p>
                           <p className="text-xs text-slate-500 line-clamp-2">{loc.address}</p>
+                          <p className="text-[10px] font-mono tabular-nums text-slate-400">
+                            {loc.lat.toFixed(4)}, {loc.lng.toFixed(4)}
+                          </p>
                         </div>
                         <span className="text-xs font-semibold text-slate-700 tabular-nums shrink-0">
                           {distKm.toFixed(1)} km
