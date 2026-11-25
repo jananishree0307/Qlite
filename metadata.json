@@ -1,0 +1,6 @@
+{
+  "name": "QLite – Smart Queue Management",
+  "description": "Skip the Wait, Save Your Time. Live crowd tracking, digital queue tokens, real-time wait updates, and staff queue management.",
+  "requestFramePermissions": ["geolocation", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,348 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerified() && request.auth.token.email == 'jananishree0307@gmail.com';
+    }
+
+    // Healthcheck connection document
+    match /test/connection {
+      allow get: if true;
+      allow list, create, update, delete: if false;
+    }
+
+    // Validation Helpers
+    function isValidNotificationPrefs(prefs) {
+      return prefs is map
+        && prefs.keys().hasAll(['fiveAhead', 'turnReady', 'delays', 'browserPush'])
+        && prefs.keys().hasOnly(['fiveAhead', 'turnReady', 'delays', 'browserPush'])
+        && prefs.fiveAhead is bool
+        && prefs.turnReady is bool
+        && prefs.delays is bool
+        && prefs.browserPush is bool;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'language', 'role', 'favoriteLocationIds', 'notificationPrefs', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'phoneNumber', 'email', 'language', 'role', 'favoriteLocationIds', 'notificationPrefs', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 20))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 120))
+        && data.language in ['en', 'ta', 'hi', 'te', 'ml', 'kn']
+        && data.role in ['user', 'staff']
+        && data.favoriteLocationIds is list && data.favoriteLocationIds.size() <= 30
+        && (data.favoriteLocationIds.size() == 0 || (data.favoriteLocationIds[0] is string && data.favoriteLocationIds[0].size() <= 128))
+        && isValidNotificationPrefs(data.notificationPrefs)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data, userId, notificationId) {
+      return data.keys().hasAll(['id', 'userId', 'locationId', 'type', 'title', 'message', 'read', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'locationId', 'tokenId', 'type', 'title', 'message', 'read', 'createdAt'])
+        && isValidId(data.id) && data.id == notificationId
+        && isValidId(data.userId) && data.userId == userId
+        && isValidId(data.locationId)
+        && (!('tokenId' in data) || (data.tokenId is string && data.tokenId.size() <= 128))
+        && data.type in ['booking', 'token_generated', 'wait_update', 'five_ahead', 'approaching', 'your_turn', 'delay', 'cancelled', 'skipped']
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.message is string && data.message.size() >= 1 && data.message.size() <= 400
+        && data.read is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidServiceLocation(data, locationId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'name', 'organizationGroup', 'category', 'address',
+          'lat', 'lng', 'operatingHours', 'crowdLevel', 'waitingCount',
+          'avgServiceMinutes', 'delayMinutes', 'currentlyServingNumber',
+          'lastTokenSequence', 'currentlyServingCode', 'isPaused', 'isActive',
+          'dataSource', 'services', 'counters', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'name', 'organizationGroup', 'category', 'address',
+          'lat', 'lng', 'operatingHours', 'crowdLevel', 'waitingCount',
+          'avgServiceMinutes', 'delayMinutes', 'currentlyServingNumber',
+          'lastTokenSequence', 'currentlyServingCode', 'isPaused', 'isActive',
+          'dataSource', 'services', 'counters', 'imageKey', 'bestTimeNote',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == locationId
+        && isValidId(data.ownerId)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.organizationGroup is string && data.organizationGroup.size() >= 1 && data.organizationGroup.size() <= 80
+        && data.category in ['temple', 'hospital', 'bank', 'post_office', 'government', 'retail', 'cinema', 'restaurant', 'college', 'other']
+        && data.address is string && data.address.size() >= 2 && data.address.size() <= 240
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && data.operatingHours is string && data.operatingHours.size() >= 2 && data.operatingHours.size() <= 100
+        && data.crowdLevel in ['low', 'moderate', 'heavy']
+        && data.waitingCount is number && data.waitingCount >= 0 && data.waitingCount <= 10000
+        && data.avgServiceMinutes is number && data.avgServiceMinutes >= 1 && data.avgServiceMinutes <= 240
+        && data.delayMinutes is number && data.delayMinutes >= 0 && data.delayMinutes <= 300
+        && data.currentlyServingNumber is number && data.currentlyServingNumber >= 0 && data.currentlyServingNumber <= 1000000
+        && data.lastTokenSequence is number && data.lastTokenSequence >= 0 && data.lastTokenSequence <= 1000000
+        && data.currentlyServingCode is string && data.currentlyServingCode.size() <= 20
+        && data.isPaused is bool
+        && data.isActive is bool
+        && data.dataSource in ['live_provider', 'demo_sample']
+        && data.services is list && data.services.size() >= 1 && data.services.size() <= 15
+        && (data.services[0] is string && data.services[0].size() >= 1 && data.services[0].size() <= 80)
+        && data.counters is list && data.counters.size() >= 1 && data.counters.size() <= 15
+        && (data.counters[0] is string && data.counters[0].size() >= 1 && data.counters[0].size() <= 40)
+        && (!('imageKey' in data) || (data.imageKey is string && data.imageKey.size() <= 60))
+        && (!('bestTimeNote' in data) || (data.bestTimeNote is string && data.bestTimeNote.size() <= 160))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQueueToken(data, locationId, tokenId) {
+      return data.keys().hasAll([
+          'id', 'locationId', 'locationOwnerId', 'locationName', 'userId',
+          'holderLabel', 'tokenCode', 'sequenceNumber', 'serviceName', 'slotLabel',
+          'priorityTier', 'priorityWeight', 'status', 'estimatedWaitMinutes',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'locationId', 'locationOwnerId', 'locationName', 'userId',
+          'holderLabel', 'tokenCode', 'sequenceNumber', 'serviceName', 'slotLabel',
+          'priorityTier', 'priorityWeight', 'status', 'counterName', 'skipReason',
+          'estimatedWaitMinutes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == tokenId
+        && isValidId(data.locationId) && data.locationId == locationId
+        && isValidId(data.locationOwnerId)
+        && data.locationName is string && data.locationName.size() >= 2 && data.locationName.size() <= 120
+        && isValidId(data.userId)
+        && data.holderLabel is string && data.holderLabel.size() >= 1 && data.holderLabel.size() <= 60
+        && data.tokenCode is string && data.tokenCode.size() >= 2 && data.tokenCode.size() <= 20
+        && data.sequenceNumber is number && data.sequenceNumber >= 1 && data.sequenceNumber <= 1000000
+        && data.serviceName is string && data.serviceName.size() >= 1 && data.serviceName.size() <= 80
+        && data.slotLabel is string && data.slotLabel.size() >= 1 && data.slotLabel.size() <= 60
+        && data.priorityTier in ['standard', 'senior', 'disability', 'medical']
+        && data.priorityWeight is number && data.priorityWeight >= 0 && data.priorityWeight <= 3
+        && data.status in ['waiting', 'serving', 'completed', 'skipped', 'cancelled']
+        && (!('counterName' in data) || (data.counterName is string && data.counterName.size() <= 40))
+        && (!('skipReason' in data) || (data.skipReason is string && data.skipReason.size() <= 160))
+        && data.estimatedWaitMinutes is number && data.estimatedWaitMinutes >= 0 && data.estimatedWaitMinutes <= 1440
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Collection: /users/{userId}
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+
+      allow create: if isValidId(userId)
+        && isVerified()
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId)
+        && isVerified()
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            isOwner(userId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phoneNumber', 'language', 'role', 'favoriteLocationIds', 'notificationPrefs', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
+
+      // Subcollection: /users/{userId}/notifications/{notificationId}
+      match /notifications/{notificationId} {
+        allow get: if isValidId(userId) && isValidId(notificationId) && (isOwner(userId) || isAdmin());
+        allow list: if isValidId(userId) && (isOwner(userId) || isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid));
+
+        allow create: if isValidId(userId) && isValidId(notificationId)
+          && isVerified()
+          && isValidNotification(incoming(), userId, notificationId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/locations/$(incoming().locationId))
+          && (
+            isOwner(userId)
+            || isAdmin()
+            || get(/databases/$(database)/documents/locations/$(incoming().locationId)).data.ownerId == request.auth.uid
+          );
+
+        allow update: if isValidId(userId) && isValidId(notificationId)
+          && isVerified()
+          && isValidNotification(incoming(), userId, notificationId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().locationId == existing().locationId
+          && incoming().createdAt == existing().createdAt
+          && (
+            isAdmin()
+            || (
+              isOwner(userId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['read'])
+            )
+          );
+
+        allow delete: if isValidId(userId) && isValidId(notificationId) && (isOwner(userId) || isAdmin());
+      }
+    }
+
+    // Collection: /locations/{locationId}
+    match /locations/{locationId} {
+      allow get: if isValidId(locationId) && (existing().isActive == true || (isSignedIn() && existing().ownerId == request.auth.uid) || isAdmin());
+      allow list: if resource.data.isActive == true || (isSignedIn() && resource.data.ownerId == request.auth.uid) || isAdmin();
+
+      allow create: if isValidId(locationId)
+        && isVerified()
+        && isValidServiceLocation(incoming(), locationId)
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(locationId)
+        && isVerified()
+        && isValidServiceLocation(incoming(), locationId)
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          // Action 1: Staff / Location Owner Management
+          || (
+            existing().ownerId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'organizationGroup', 'category', 'address', 'lat', 'lng',
+              'operatingHours', 'crowdLevel', 'waitingCount', 'avgServiceMinutes',
+              'delayMinutes', 'currentlyServingNumber', 'lastTokenSequence',
+              'currentlyServingCode', 'isPaused', 'isActive', 'dataSource',
+              'services', 'counters', 'imageKey', 'bestTimeNote', 'updatedAt'
+            ])
+          )
+          // Action 2: User Join Queue Counter Increment
+          || (
+            existing().isActive == true
+            && existing().isPaused == false
+            && incoming().diff(existing()).affectedKeys().hasOnly(['waitingCount', 'lastTokenSequence', 'crowdLevel', 'updatedAt'])
+            && incoming().lastTokenSequence == existing().lastTokenSequence + 1
+            && incoming().waitingCount == existing().waitingCount + 1
+          )
+          // Action 3: User Cancel Queue Counter Decrement
+          || (
+            existing().isActive == true
+            && incoming().diff(existing()).affectedKeys().hasOnly(['waitingCount', 'crowdLevel', 'updatedAt'])
+            && existing().waitingCount > 0
+            && incoming().waitingCount == existing().waitingCount - 1
+          )
+        );
+
+      allow delete: if isValidId(locationId) && (isAdmin() || (isVerified() && existing().ownerId == request.auth.uid));
+
+      // Subcollection: /locations/{locationId}/tokens/{tokenId}
+      match /tokens/{tokenId} {
+        allow get: if isValidId(locationId) && isValidId(tokenId) && isSignedIn() && (
+          existing().userId == request.auth.uid
+          || existing().locationOwnerId == request.auth.uid
+          || existing().status in ['waiting', 'serving']
+          || isAdmin()
+        );
+
+        allow list: if isSignedIn() && (
+          resource.data.userId == request.auth.uid
+          || resource.data.locationOwnerId == request.auth.uid
+          || resource.data.status in ['waiting', 'serving']
+          || isAdmin()
+        );
+
+        allow create: if isValidId(locationId) && isValidId(tokenId)
+          && isVerified()
+          && isValidQueueToken(incoming(), locationId, tokenId)
+          && incoming().userId == request.auth.uid
+          && incoming().status == 'waiting'
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/locations/$(locationId))
+          && get(/databases/$(database)/documents/locations/$(locationId)).data.isActive == true
+          && get(/databases/$(database)/documents/locations/$(locationId)).data.isPaused == false
+          && incoming().locationOwnerId == get(/databases/$(database)/documents/locations/$(locationId)).data.ownerId;
+
+        allow update: if isValidId(locationId) && isValidId(tokenId)
+          && isVerified()
+          && isValidQueueToken(incoming(), locationId, tokenId)
+          && incoming().id == existing().id
+          && incoming().locationId == existing().locationId
+          && incoming().locationOwnerId == existing().locationOwnerId
+          && incoming().userId == existing().userId
+          && incoming().sequenceNumber == existing().sequenceNumber
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin()
+            // Terminal State Locking: Non-admins cannot modify completed/skipped/cancelled tokens
+            || (
+              !(existing().status in ['completed', 'skipped', 'cancelled'])
+              && (
+                // Action 1: Token Holder Cancels Waiting Token
+                (
+                  existing().userId == request.auth.uid
+                  && existing().status == 'waiting'
+                  && incoming().status == 'cancelled'
+                  && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                )
+                // Action 2: Location Staff Calls, Completes, or Skips Token
+                || (
+                  get(/databases/$(database)/documents/locations/$(locationId)).data.ownerId == request.auth.uid
+                  && incoming().status in ['serving', 'completed', 'skipped']
+                  && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'counterName', 'skipReason', 'updatedAt'])
+                )
+              )
+            )
+          );
+
+        allow delete: if isValidId(locationId) && isValidId(tokenId) && isAdmin();
+      }
+    }
+
+    // CollectionGroup rule for user's own booking history across all locations
+    match /{path=**}/tokens/{tokenId} {
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+  }
+}

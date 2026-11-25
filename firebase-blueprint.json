@@ -1,0 +1,346 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private user account profile, language preference, saved favorites, and notification settings.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "phoneNumber": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "language": {
+          "type": "string",
+          "enum": ["en", "ta", "hi", "te", "ml", "kn"]
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "staff"]
+        },
+        "favoriteLocationIds": {
+          "type": "array",
+          "description": "Up to 30 saved location IDs."
+        },
+        "notificationPrefs": {
+          "type": "object",
+          "description": "Notification alert preferences."
+        },
+        "fcmToken": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional Firebase Cloud Messaging registration token."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "language", "role", "favoriteLocationIds", "notificationPrefs", "createdAt", "updatedAt"]
+    },
+    "UserNotification": {
+      "title": "UserNotification",
+      "description": "Queue status alert or booking notification for a specific user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "locationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tokenId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "type": {
+          "type": "string",
+          "enum": ["booking", "token_generated", "wait_update", "five_ahead", "two_ahead", "approaching", "your_turn", "delay", "cancelled", "skipped"]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        },
+        "read": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "locationId", "type", "title", "message", "read", "createdAt"]
+    },
+    "ServiceLocation": {
+      "title": "ServiceLocation",
+      "description": "Public service venue with live or demo queue metrics, coordinates, counters, and operating hours.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "organizationGroup": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "category": {
+          "type": "string",
+          "enum": ["temple", "hospital", "bank", "mall", "post_office", "government", "retail", "cinema", "restaurant", "college", "other"]
+        },
+        "googlePlaceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "address": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 240
+        },
+        "lat": {
+          "type": "number"
+        },
+        "lng": {
+          "type": "number"
+        },
+        "operatingHours": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "crowdLevel": {
+          "type": "string",
+          "enum": ["low", "moderate", "high", "very_high", "heavy"]
+        },
+        "crowdPercentage": {
+          "type": "number"
+        },
+        "maxCapacity": {
+          "type": "number"
+        },
+        "waitingCount": {
+          "type": "number"
+        },
+        "avgServiceMinutes": {
+          "type": "number"
+        },
+        "delayMinutes": {
+          "type": "number"
+        },
+        "currentlyServingNumber": {
+          "type": "number"
+        },
+        "lastTokenSequence": {
+          "type": "number"
+        },
+        "currentlyServingCode": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "isPaused": {
+          "type": "boolean"
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "dataSource": {
+          "type": "string",
+          "enum": ["live_provider", "demo_sample"]
+        },
+        "services": {
+          "type": "array"
+        },
+        "counters": {
+          "type": "array"
+        },
+        "imageKey": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "bestTimeNote": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id", "ownerId", "name", "organizationGroup", "category", "address",
+        "lat", "lng", "operatingHours", "crowdLevel", "waitingCount",
+        "avgServiceMinutes", "delayMinutes", "currentlyServingNumber",
+        "lastTokenSequence", "currentlyServingCode", "isPaused", "isActive",
+        "dataSource", "services", "counters", "createdAt", "updatedAt"
+      ]
+    },
+    "QueueToken": {
+      "title": "QueueToken",
+      "description": "Digital queue token issued to a user at a specific service location.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "locationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "locationOwnerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "locationName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "holderLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "tokenCode": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 20
+        },
+        "sequenceNumber": {
+          "type": "number"
+        },
+        "serviceName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "slotLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "priorityTier": {
+          "type": "string",
+          "enum": ["standard", "senior", "disability", "medical"]
+        },
+        "priorityWeight": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["waiting", "in_progress", "serving", "completed", "skipped", "cancelled"]
+        },
+        "counterName": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "skipReason": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "estimatedWaitMinutes": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id", "locationId", "locationOwnerId", "locationName", "userId",
+        "holderLabel", "tokenCode", "sequenceNumber", "serviceName", "slotLabel",
+        "priorityTier", "priorityWeight", "status", "estimatedWaitMinutes",
+        "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profiles keyed by Firebase Auth UID."
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/UserNotification" },
+      "description": "Queue and booking notifications for a user."
+    },
+    "/locations/{locationId}": {
+      "schema": { "$ref": "#/entities/ServiceLocation" },
+      "description": "Registered service locations and live/demo queue metrics."
+    },
+    "/locations/{locationId}/tokens/{tokenId}": {
+      "schema": { "$ref": "#/entities/QueueToken" },
+      "description": "Digital queue tokens scoped to a service location."
+    }
+  }
+}
