@@ -586,9 +586,22 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
               <button
                 type="button"
                 onClick={() => navigate(data.user ? 'profile' : 'auth')}
-                className="min-h-[40px] px-4 py-1.5 rounded-lg bg-blue-700 text-white text-xs font-semibold hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0"
+                className={`min-h-[40px] px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-2 ${
+                  data.user
+                    ? 'bg-slate-900 text-white hover:bg-slate-800'
+                    : 'bg-blue-700 text-white hover:bg-blue-800'
+                }`}
               >
-                {data.user ? t.nav.profile : 'Sign In'}
+                {data.user && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" aria-hidden="true" />
+                )}
+                <span className="max-w-[110px] truncate">
+                  {data.user
+                    ? data.profile?.displayName?.split(' ')[0] ||
+                      data.user.displayName?.split(' ')[0] ||
+                      t.nav.profile
+                    : 'Sign In'}
+                </span>
               </button>
             </div>
           </div>
@@ -620,7 +633,14 @@ function AppContent({ language, onChangeLanguageState }: AppContentProps) {
             profile={data.profile}
             t={t}
             busy={data.busyAction === 'auth'}
-            onGoogleSignIn={data.signInWithGoogle}
+            authError={data.authError}
+            onGoogleSignIn={async () => {
+              const signedIn = await data.signInWithGoogle();
+              if (signedIn) {
+                showToast(`Signed in as ${signedIn.email || signedIn.displayName || 'Google user'}`);
+              }
+              return signedIn;
+            }}
             onSaveProfile={async (name, phone) => {
               await data.updateProfileSettings({ displayName: name, phoneNumber: phone });
             }}

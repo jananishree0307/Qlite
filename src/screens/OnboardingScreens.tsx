@@ -1,5 +1,15 @@
-import React, { useState } from 'react';
-import { ArrowRight, Check, Globe, Phone, ShieldCheck, Sparkles, User as UserIcon } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import {
+  AlertCircle,
+  ArrowRight,
+  Check,
+  ExternalLink,
+  Globe,
+  Phone,
+  ShieldCheck,
+  Sparkles,
+  User as UserIcon,
+} from 'lucide-react';
 import { User } from 'firebase/auth';
 import { BRAND_IMAGE_PATH, HERO_CITY_IMAGE_PATH } from '../data/seedLocations';
 import { LANGUAGES, TranslationBundle } from '../i18n/translations';
@@ -137,7 +147,8 @@ interface AuthScreenProps {
   profile: UserProfile | null;
   t: TranslationBundle;
   busy: boolean;
-  onGoogleSignIn: () => Promise<void>;
+  authError?: string | null;
+  onGoogleSignIn: () => Promise<User | void>;
   onSaveProfile: (name: string, phone: string) => Promise<void>;
   onContinue: () => void;
 }
@@ -147,6 +158,7 @@ export function AuthScreen({
   profile,
   t,
   busy,
+  authError,
   onGoogleSignIn,
   onSaveProfile,
   onContinue,
@@ -157,6 +169,31 @@ export function AuthScreen({
   const [otpInput, setOtpInput] = useState('');
   const [error, setError] = useState('');
   const [savedNotice, setSavedNotice] = useState(false);
+
+  useEffect(() => {
+    const resolvedName = profile?.displayName || user?.displayName || '';
+    if (resolvedName) {
+      setName((prev) => prev || resolvedName);
+    }
+    if (profile?.phoneNumber) {
+      setPhone((prev) => prev || profile.phoneNumber || '');
+    }
+  }, [user, profile]);
+
+  const displayedError = error || authError || '';
+  const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
+
+  const handleGoogleSignInClick = async () => {
+    setError('');
+    try {
+      const signedInUser = await onGoogleSignIn();
+      if (signedInUser) {
+        onContinue();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Google Sign-In failed. Please try again.');
+    }
+  };
 
   const handleVerifyMobile = () => {
     const cleaned = phone.replace(/\s+/g, '');
@@ -170,20 +207,21 @@ export function AuthScreen({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
-      setError('Please enter your name.');
-      return;
-    }
+    const fallbackName = name.trim() || user?.displayName || 'QLite User';
     if (otpRequested && otpInput.trim().length > 0 && otpInput.trim() !== '123456') {
       setError('Verification code check: enter 123456 or leave blank after Google Sign-In.');
       return;
     }
     setError('');
-    await onSaveProfile(name.trim(), phone.trim());
-    setSavedNotice(true);
-    setTimeout(() => {
-      onContinue();
-    }, 350);
+    try {
+      await onSaveProfile(fallbackName, phone.trim());
+      setSavedNotice(true);
+      setTimeout(() => {
+        onContinue();
+      }, 250);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to save profile.');
+    }
   };
 
   return (
@@ -207,12 +245,32 @@ export function AuthScreen({
               <button
                 type="button"
                 disabled={busy}
-                onClick={onGoogleSignIn}
+                onClick={handleGoogleSignInClick}
                 className="w-full min-h-[48px] px-5 py-3 rounded-xl bg-blue-700 text-white text-sm font-semibold hover:bg-blue-800 disabled:opacity-60 transition-colors flex items-center justify-center gap-2 shadow-xs"
               >
                 <span>{busy ? 'Signing in...' : t.auth.googleSignIn}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
+
+              {displayedError && (
+                <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-900 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                    <span className="leading-relaxed font-medium">{displayedError}</span>
+                  </div>
+                  {isInIframe && (
+                    <a
+                      href={window.location.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-blue-700 hover:text-blue-800 font-semibold underline"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open QLite in a new browser tab to sign in</span>
+                    </a>
+                  )}
+                </div>
+              )}
 
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 leading-relaxed">
                 {t.auth.otpNote}

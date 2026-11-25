@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { User, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { User, getRedirectResult, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
   collection,
   collectionGroup,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   runTransaction,
@@ -18,6 +19,7 @@ import {
   OperationType,
   auth,
   db,
+  formatFirebaseAuthError,
   googleProvider,
   handleFirestoreError,
 } from '../lib/firebase';
@@ -69,6 +71,7 @@ export function useQLiteData() {
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
   const [staffLocationId, setStaffLocationId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const alertedStagesRef = useRef<Record<string, boolean>>({});
 
   // Verified live provider locations from Firestore only (no demo/fabricated fallback venues)
@@ -78,8 +81,12 @@ export function useQLiteData() {
 
   // Listen to Firebase Auth
   useEffect(() => {
+    void getRedirectResult(auth).catch((err) => {
+      setAuthError(formatFirebaseAuthError(err));
+    });
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
+      if (u) setAuthError(null);
       setAuthReady(true);
     });
     return () => unsub();
@@ -158,9 +165,11 @@ export function useQLiteData() {
       userRef,
       async (snap) => {
         if (!snap.exists()) {
+          const safeDisplayName =
+            sanitizeString(user.displayName || '', BLUEPRINT_LIMITS.DISPLAY_NAME_MAX) || 'QLite User';
           const initialProfile: UserProfile = {
             uid: user.uid,
-            displayName: sanitizeString(user.displayName || 'QLite User', BLUEPRINT_LIMITS.DISPLAY_NAME_MAX),
+            displayName: safeDisplayName,
             phoneNumber: '',
             email: sanitizeString(user.email || '', 120),
             language: (localStorage.getItem('qlite_lang') as LanguageCode) || 'en',
@@ -251,12 +260,53 @@ export function useQLiteData() {
         setUserTokens(list);
       },
       (err) => {
+        const code = (err as { code?: string })?.code;
+        if (code === 'failed-precondition') {
+          // Fallback to per-location token queries if collectionGroup index is not yet provisioned
+          void Promise.all(
+            firestoreLocations.map((loc) =>
+              getDocs(
+                query(collection(db, 'locations', loc.id, 'tokens'), where('userId', '==', user.uid))
+              ).catch(() => null)
+            )
+          ).then((snaps) => {
+            const merged: QueueToken[] = [];
+            snaps.forEach((s) => {
+              if (!s) return;
+              s.docs.forEach((d) => {
+                const data = d.data();
+                merged.push({
+                  id: d.id,
+                  locationId: String(data.locationId || ''),
+                  locationOwnerId: String(data.locationOwnerId || ''),
+                  locationName: String(data.locationName || ''),
+                  userId: String(data.userId || ''),
+                  holderLabel: String(data.holderLabel || ''),
+                  tokenCode: String(data.tokenCode || ''),
+                  sequenceNumber: Number(data.sequenceNumber || 0),
+                  serviceName: String(data.serviceName || ''),
+                  slotLabel: String(data.slotLabel || ''),
+                  priorityTier: (data.priorityTier as PriorityTier) || 'standard',
+                  priorityWeight: Number(data.priorityWeight || 0),
+                  status: data.status || 'waiting',
+                  counterName: data.counterName ? String(data.counterName) : undefined,
+                  skipReason: data.skipReason ? String(data.skipReason) : undefined,
+                  estimatedWaitMinutes: Number(data.estimatedWaitMinutes || 0),
+                  createdAtMs: tsToMs(data.createdAt),
+                  updatedAtMs: tsToMs(data.updatedAt),
+                });
+              });
+            });
+            setUserTokens(merged.sort((a, b) => b.createdAtMs - a.createdAtMs));
+          });
+          return;
+        }
         handleFirestoreError(err, OperationType.LIST, 'tokens(collectionGroup)');
       }
     );
 
     return () => unsub();
-  }, [authReady, user]);
+  }, [authReady, user, firestoreLocations]);
 
   // Listen to User's Notifications
   useEffect(() => {
@@ -576,8 +626,15 @@ export function useQLiteData() {
   // Auth Actions
   const signInWithGoogle = useCallback(async () => {
     setBusyAction('auth');
+    setAuthError(null);
     try {
-      await signInWithPopup(auth, googleProvider);
+      const cred = await signInWithPopup(auth, googleProvider);
+      setUser(cred.user);
+      return cred.user;
+    } catch (err) {
+      const message = formatFirebaseAuthError(err);
+      setAuthError(message);
+      throw new Error(message);
     } finally {
       setBusyAction(null);
     }
@@ -587,6 +644,7 @@ export function useQLiteData() {
     setBusyAction('auth');
     try {
       await signOut(auth);
+      setAuthError(null);
     } finally {
       setBusyAction(null);
     }
@@ -602,32 +660,65 @@ export function useQLiteData() {
         >
       >
     ) => {
-      if (!user || !profile) return;
+      if (!user) return;
       const userRef = doc(db, 'users', user.uid);
-      let nextFcmToken = profile.fcmToken;
+      let nextFcmToken = profile?.fcmToken;
       if (updates.notificationPrefs?.browserPush) {
         const fcmRes = await initFcmAndGetToken();
         if (fcmRes.token) {
           nextFcmToken = sanitizeString(fcmRes.token, BLUEPRINT_LIMITS.FCM_TOKEN_MAX);
         }
       }
+      const resolvedName =
+        sanitizeString(
+          updates.displayName ?? profile?.displayName ?? user.displayName ?? '',
+          BLUEPRINT_LIMITS.DISPLAY_NAME_MAX
+        ) || 'QLite User';
+      const resolvedPhone = sanitizeString(
+        updates.phoneNumber ?? profile?.phoneNumber ?? '',
+        BLUEPRINT_LIMITS.PHONE_MAX
+      );
+      const resolvedLang = updates.language ?? profile?.language ?? ((localStorage.getItem('qlite_lang') as LanguageCode) || 'en');
+      const resolvedPrefs = updates.notificationPrefs ??
+        profile?.notificationPrefs ?? {
+          fiveAhead: true,
+          turnReady: true,
+          delays: true,
+          browserPush: false,
+        };
+      const resolvedFavs = (updates.favoriteLocationIds ?? profile?.favoriteLocationIds ?? []).slice(
+        0,
+        BLUEPRINT_LIMITS.MAX_FAVORITES
+      );
+
       try {
+        if (!profile) {
+          const existingSnap = await getDoc(userRef);
+          if (!existingSnap.exists()) {
+            await setDoc(userRef, {
+              uid: user.uid,
+              displayName: resolvedName,
+              phoneNumber: resolvedPhone,
+              email: sanitizeString(user.email || '', 120),
+              language: resolvedLang,
+              role: 'user',
+              favoriteLocationIds: resolvedFavs,
+              notificationPrefs: resolvedPrefs,
+              ...(nextFcmToken ? { fcmToken: nextFcmToken } : {}),
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            return;
+          }
+        }
+
         await updateDoc(userRef, {
-          displayName: sanitizeString(
-            updates.displayName ?? profile.displayName,
-            BLUEPRINT_LIMITS.DISPLAY_NAME_MAX
-          ),
-          phoneNumber: sanitizeString(
-            updates.phoneNumber ?? profile.phoneNumber ?? '',
-            BLUEPRINT_LIMITS.PHONE_MAX
-          ),
-          language: updates.language ?? profile.language,
-          role: updates.role ?? profile.role,
-          favoriteLocationIds: (updates.favoriteLocationIds ?? profile.favoriteLocationIds).slice(
-            0,
-            BLUEPRINT_LIMITS.MAX_FAVORITES
-          ),
-          notificationPrefs: updates.notificationPrefs ?? profile.notificationPrefs,
+          displayName: resolvedName,
+          phoneNumber: resolvedPhone,
+          language: resolvedLang,
+          role: updates.role ?? profile?.role ?? 'user',
+          favoriteLocationIds: resolvedFavs,
+          notificationPrefs: resolvedPrefs,
           ...(nextFcmToken ? { fcmToken: nextFcmToken } : {}),
           updatedAt: serverTimestamp(),
         });
@@ -1249,6 +1340,7 @@ export function useQLiteData() {
     notifications,
     unreadNotificationCount: notifications.filter((n) => !n.read).length,
     busyAction,
+    authError,
     isAdminUser,
     selectedLocationId,
     setSelectedLocationId,
